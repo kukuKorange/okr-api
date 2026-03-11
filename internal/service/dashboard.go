@@ -76,13 +76,93 @@ func (s *DashboardService) GetDashboard(userID uint) (map[string]interface{}, er
 		Where("user_id = ? AND is_completed = ? AND due_date < ?", userID, false, today).
 		Count(&overdueCount)
 
-	// Active projects (top 3)
-	var projects []model.Project
-	s.db.Preload("Tasks").Where("user_id = ? AND status IN ?", userID, []string{"planning", "in_progress"}).
-		Order("updated_at DESC").Limit(3).Find(&projects)
+	// All user projects for summary
+	var allProjects []model.Project
+	s.db.Preload("Tasks").Where("user_id = ?", userID).Find(&allProjects)
 
+	statusCounts := map[string]int{
+		"to_discuss":  0,
+		"pending":     0,
+		"planning":    0,
+		"in_progress": 0,
+		"completed":   0,
+	}
+	totalTasks := 0
+	totalTasksDone := 0
+	totalTasksInProgress := 0
+	overdueProjects := 0
+	overdueTasksCount := 0
+
+	projectMap := make(map[uint]model.Project)
+	for _, p := range allProjects {
+		projectMap[p.ID] = p
+		if _, ok := statusCounts[p.Status]; ok {
+			statusCounts[p.Status]++
+		}
+		for _, t := range p.Tasks {
+			totalTasks++
+			if t.Status == "done" {
+				totalTasksDone++
+			} else if t.Status == "in_progress" {
+				totalTasksInProgress++
+			}
+			if t.Status != "done" && t.DueDate != nil && t.DueDate.Before(today) {
+				overdueTasksCount++
+			}
+		}
+		if p.Deadline != nil && p.Status != "completed" && p.Deadline.Before(today) {
+			overdueProjects++
+		}
+	}
+
+	overallRate := 0.0
+	if totalTasks > 0 {
+		overallRate = float64(totalTasksDone) / float64(totalTasks) * 100
+	}
+
+	projectSummary := map[string]interface{}{
+		"total_projects":      len(allProjects),
+		"status_counts":       statusCounts,
+		"total_tasks":         totalTasks,
+		"tasks_done":          totalTasksDone,
+		"tasks_in_progress":   totalTasksInProgress,
+		"tasks_todo":          totalTasks - totalTasksDone - totalTasksInProgress,
+		"overall_rate":        overallRate,
+		"overdue_projects":    overdueProjects,
+		"overdue_tasks_count": overdueTasksCount,
+	}
+
+	// Upcoming tasks: non-done tasks sorted by urgency (overdue first, then soonest deadline, then highest priority)
+	var upcomingRaw []model.ProjectTask
+	todayStr := today.Format("2006-01-02")
+	s.db.Raw(`SELECT * FROM project_tasks WHERE user_id = ? AND status != 'done'
+		ORDER BY priority DESC, CASE WHEN due_date < ? THEN 0 ELSE 1 END, due_date ASC NULLS LAST
+		LIMIT 20`, userID, todayStr).Scan(&upcomingRaw)
+
+	upcomingTasks := make([]map[string]interface{}, 0, len(upcomingRaw))
+	for _, t := range upcomingRaw {
+		item := map[string]interface{}{
+			"id":         t.ID,
+			"title":      t.Title,
+			"status":     t.Status,
+			"priority":   t.Priority,
+			"due_date":   t.DueDate,
+			"project_id": t.ProjectID,
+		}
+		if p, ok := projectMap[t.ProjectID]; ok {
+			item["project_title"] = p.Title
+			item["project_icon"] = p.Icon
+			item["project_color"] = p.Color
+		}
+		upcomingTasks = append(upcomingTasks, item)
+	}
+
+	// Active projects (top 5) for detail cards
 	projectCards := make([]map[string]interface{}, 0)
-	for _, p := range projects {
+	for _, p := range allProjects {
+		if p.Status == "completed" || p.Status == "archived" {
+			continue
+		}
 		stats := p.TaskStats()
 		projectCards = append(projectCards, map[string]interface{}{
 			"id":         p.ID,
@@ -90,10 +170,15 @@ func (s *DashboardService) GetDashboard(userID uint) (map[string]interface{}, er
 			"icon":       p.Icon,
 			"color":      p.Color,
 			"status":     p.Status,
+			"priority":   p.Priority,
 			"progress":   p.Progress(),
 			"task_stats": stats,
+			"start_date": p.StartDate,
 			"deadline":   p.Deadline,
 		})
+		if len(projectCards) >= 5 {
+			break
+		}
 	}
 
 	// Recent activities
@@ -112,7 +197,9 @@ func (s *DashboardService) GetDashboard(userID uint) (map[string]interface{}, er
 		"habits_done":   checkedCount,
 		"todo_count":    todoCount,
 		"overdue_count": overdueCount,
-		"projects":      projectCards,
+		"projects":         projectCards,
+		"project_summary":  projectSummary,
+		"upcoming_tasks":   upcomingTasks,
 		"activities":    activities,
 	}, nil
 }

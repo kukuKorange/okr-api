@@ -23,10 +23,48 @@ func NewHabitHandler(svc *service.HabitService, dashSvc *service.DashboardServic
 
 func (h *HabitHandler) Create(c *gin.Context) {
 	uid := middleware.GetUserID(c)
-	var habit model.Habit
-	if err := c.ShouldBindJSON(&habit); err != nil {
+	var req struct {
+		Name               string `json:"name" binding:"required"`
+		Icon               string `json:"icon"`
+		Color              string `json:"color"`
+		Frequency          string `json:"frequency"`
+		WeeklyTarget       int    `json:"weekly_target"`
+		StartDate          string `json:"start_date"`
+		FamilyMemberTarget *uint  `json:"family_member_target"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
 		return
+	}
+	startDate := time.Now()
+	if req.StartDate != "" {
+		for _, layout := range []string{"2006-01-02", time.RFC3339} {
+			if t, err := time.Parse(layout, req.StartDate); err == nil {
+				startDate = t
+				break
+			}
+		}
+	}
+	habit := model.Habit{
+		Name:               req.Name,
+		Icon:               req.Icon,
+		Color:              req.Color,
+		Frequency:          req.Frequency,
+		WeeklyTarget:       req.WeeklyTarget,
+		StartDate:          startDate,
+		FamilyMemberTarget: req.FamilyMemberTarget,
+	}
+	if habit.Icon == "" {
+		habit.Icon = "📌"
+	}
+	if habit.Color == "" {
+		habit.Color = "#4F46E5"
+	}
+	if habit.Frequency == "" {
+		habit.Frequency = "daily"
+	}
+	if habit.WeeklyTarget == 0 {
+		habit.WeeklyTarget = 1
 	}
 	if err := h.svc.Create(uid, &habit); err != nil {
 		response.ServerError(c, err.Error())

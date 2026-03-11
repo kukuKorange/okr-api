@@ -2,6 +2,7 @@ package handler
 
 import (
 	"strconv"
+	"time"
 
 	"goaltrack/internal/middleware"
 	"goaltrack/internal/model"
@@ -10,6 +11,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+func parseDateRequired(s string) time.Time {
+	for _, layout := range []string{"2006-01-02", time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Now()
+}
 
 type GoalHandler struct {
 	svc      *service.GoalService
@@ -22,10 +32,37 @@ func NewGoalHandler(svc *service.GoalService, dashSvc *service.DashboardService)
 
 func (h *GoalHandler) Create(c *gin.Context) {
 	uid := middleware.GetUserID(c)
-	var goal model.Goal
-	if err := c.ShouldBindJSON(&goal); err != nil {
+	var req struct {
+		Title       string  `json:"title" binding:"required"`
+		Category    string  `json:"category"`
+		Unit        string  `json:"unit"`
+		TargetValue float64 `json:"target_value"`
+		StartValue  float64 `json:"start_value"`
+		Direction   string  `json:"direction"`
+		StartDate   string  `json:"start_date"`
+		Deadline    string  `json:"deadline"`
+		FamilyID    *uint   `json:"family_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
 		return
+	}
+	goal := model.Goal{
+		Title:       req.Title,
+		Category:    req.Category,
+		Unit:        req.Unit,
+		TargetValue: req.TargetValue,
+		StartValue:  req.StartValue,
+		Direction:   req.Direction,
+		StartDate:   parseDateRequired(req.StartDate),
+		Deadline:    parseDateRequired(req.Deadline),
+		FamilyID:    req.FamilyID,
+	}
+	if goal.Category == "" {
+		goal.Category = "custom"
+	}
+	if goal.Direction == "" {
+		goal.Direction = "increase"
 	}
 	if err := h.svc.Create(uid, &goal); err != nil {
 		response.ServerError(c, err.Error())
@@ -129,10 +166,24 @@ func (h *GoalHandler) Archive(c *gin.Context) {
 func (h *GoalHandler) AddLog(c *gin.Context) {
 	uid := middleware.GetUserID(c)
 	goalID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	var log model.GoalLog
-	if err := c.ShouldBindJSON(&log); err != nil {
+	var req struct {
+		LogDate      string  `json:"log_date"`
+		Value        float64 `json:"value"`
+		Note         string  `json:"note"`
+		PhotoURL     string  `json:"photo_url"`
+		PlanTomorrow string  `json:"plan_tomorrow"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
 		return
+	}
+	logDate := parseDateRequired(req.LogDate)
+	log := model.GoalLog{
+		LogDate:      logDate,
+		Value:        req.Value,
+		Note:         req.Note,
+		PhotoURL:     req.PhotoURL,
+		PlanTomorrow: req.PlanTomorrow,
 	}
 	if err := h.svc.AddLog(uid, uint(goalID), &log); err != nil {
 		response.Fail(c, 400, err.Error())
@@ -176,10 +227,19 @@ func (h *GoalHandler) Predict(c *gin.Context) {
 func (h *GoalHandler) CreateMilestone(c *gin.Context) {
 	uid := middleware.GetUserID(c)
 	goalID, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	var m model.Milestone
-	if err := c.ShouldBindJSON(&m); err != nil {
+	var req struct {
+		Title       string  `json:"title" binding:"required"`
+		TargetValue float64 `json:"target_value"`
+		TargetDate  string  `json:"target_date"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
 		return
+	}
+	m := model.Milestone{
+		Title:       req.Title,
+		TargetValue: req.TargetValue,
+		TargetDate:  parseDateRequired(req.TargetDate),
 	}
 	if err := h.svc.CreateMilestone(uid, uint(goalID), &m); err != nil {
 		response.Fail(c, 400, err.Error())

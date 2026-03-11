@@ -35,7 +35,7 @@ func (s *ProjectService) List(userID uint, status string, page, size int) ([]map
 	}
 
 	q.Model(&model.Project{}).Count(&total)
-	err := q.Order("CASE status WHEN 'in_progress' THEN 0 WHEN 'planning' THEN 1 WHEN 'completed' THEN 2 ELSE 3 END, updated_at DESC").
+	err := q.Order("CASE status WHEN 'in_progress' THEN 0 WHEN 'planning' THEN 1 WHEN 'pending' THEN 2 WHEN 'to_discuss' THEN 3 WHEN 'completed' THEN 4 ELSE 5 END, updated_at DESC").
 		Offset((page - 1) * size).Limit(size).Find(&projects).Error
 	if err != nil {
 		return nil, 0, err
@@ -160,9 +160,6 @@ func (s *ProjectService) UpdateTask(userID, taskID uint, updates map[string]inte
 	if err := s.db.Model(&model.ProjectTask{}).Where("id = ?", taskID).Updates(updates).Error; err != nil {
 		return err
 	}
-
-	// Auto-check project completion
-	s.checkProjectCompletion(task.ProjectID)
 	return nil
 }
 
@@ -194,19 +191,6 @@ func (s *ProjectService) MoveTask(userID, taskID uint, status string, phaseID *u
 		updates["phase_id"] = phaseID
 	}
 	return s.UpdateTask(userID, taskID, updates)
-}
-
-func (s *ProjectService) checkProjectCompletion(projectID uint) {
-	var total, done int64
-	s.db.Model(&model.ProjectTask{}).Where("project_id = ?", projectID).Count(&total)
-	s.db.Model(&model.ProjectTask{}).Where("project_id = ? AND status = ?", projectID, "done").Count(&done)
-	if total > 0 && total == done {
-		now := time.Now()
-		s.db.Model(&model.Project{}).Where("id = ?", projectID).Updates(map[string]interface{}{
-			"status":       "completed",
-			"completed_at": &now,
-		})
-	}
 }
 
 // GetOverdueTasks returns tasks past due date
